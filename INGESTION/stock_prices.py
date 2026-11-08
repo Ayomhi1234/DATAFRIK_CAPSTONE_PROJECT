@@ -16,7 +16,7 @@ def fetch_stock_prices():
         stock = yf.Ticker(ticker)
 
         data = stock.history(
-            period="1y",
+            period="5d",
             interval="1d"
         )
 
