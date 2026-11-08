@@ -1,3 +1,4 @@
+
 import os
 import time
 import requests
@@ -27,7 +28,7 @@ if not all([
 ]):
     raise ValueError("One or more required environment variables are missing.")
 
-# Convert the URL if it uses SQLAlchemy's psycopg2 driver notation
+# Convert the URL for SQLAlchemy's psycopg2 driver
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace(
         "postgresql://",
@@ -62,7 +63,10 @@ def get_access_token():
         timeout=30
     )
 
-    response.raise_for_status()
+    if not response.ok:
+        print("Airbyte authentication failed:", response.status_code)
+        print("Details:", response.text)
+        response.raise_for_status()
 
     token_data = response.json()
     access_token = token_data["access_token"]
@@ -73,7 +77,8 @@ def get_access_token():
 
 def airbyte_request(method, endpoint, **kwargs):
     """Make an authenticated Airbyte API request."""
-    headers = kwargs.pop("headers", {})
+
+    headers = kwargs.pop("headers", {}).copy()
     headers["Authorization"] = f"Bearer {get_access_token()}"
     headers["Accept"] = "application/json"
 
@@ -99,31 +104,89 @@ def airbyte_request(method, endpoint, **kwargs):
             **kwargs
         )
 
-    response.raise_for_status()
+    # Display the actual API error for easier troubleshooting
+    if not response.ok:
+        print("\nAirbyte API request failed.")
+        print("Endpoint:", endpoint)
+        print("HTTP status:", response.status_code)
+        print("Response:", response.text)
+        response.raise_for_status()
+
+    if not response.text.strip():
+        return {}
+
     return response.json()
+
+
+def get_connection_status(connection_id):
+    """Check whether a connection already has an active sync."""
+
+    result = airbyte_request(
+        "GET",
+        f"/connections/{connection_id}"
+    )
+
+    return result
 
 
 def run_airbyte_sync(connection_id, connection_name):
     """Trigger a sync and wait until Airbyte finishes."""
-    print(f"\nStarting Airbyte sync: {connection_name}")
 
-    job = airbyte_request(
-        "POST",
+    print(f"\nChecking connection: {connection_name}")
+
+    connection = get_connection_status(connection_id)
+
+    print("Connection details retrieved successfully.")
+
+    # Check for an existing running job before triggering another
+    jobs = airbyte_request(
+        "GET",
         "/jobs",
-        json={
+        params={
             "connectionId": connection_id,
-            "jobType": "sync"
+            "limit": 10
         }
     )
 
-    job_id = job["jobId"]
+    existing_jobs = jobs.get("data", [])
+
+    for existing_job in existing_jobs:
+        status = existing_job.get("status", "").lower()
+
+        if status in ["pending", "running", "incomplete"]:
+            print(
+                f"An existing {connection_name} job is still active: "
+                f"{existing_job.get('jobId')}"
+            )
+
+            job_id = existing_job["jobId"]
+            break
+    else:
+        print(f"\nStarting Airbyte sync: {connection_name}")
+
+        job = airbyte_request(
+            "POST",
+            "/jobs",
+            json={
+                "connectionId": connection_id,
+                "jobType": "sync"
+            }
+        )
+
+        job_id = job["jobId"]
+
     print(f"Airbyte job ID: {job_id}")
 
     start_time = time.time()
     timeout_seconds = 3600
 
     while time.time() - start_time < timeout_seconds:
-        result = airbyte_request("GET", f"/jobs/{job_id}")
+
+        result = airbyte_request(
+            "GET",
+            f"/jobs/{job_id}"
+        )
+
         status = result.get("status", "").lower()
 
         print(f"{connection_name} status: {status}")
@@ -221,4 +284,3 @@ if __name__ == "__main__":
     load_airbyte_data_into_warehouse()
 
     print("\nAirbyte ingestion and warehouse loading completed.")
-    
