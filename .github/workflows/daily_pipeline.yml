@@ -1,0 +1,91 @@
+name: Daily Portfolio Analytics Pipeline
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 7 * * 1-5"
+
+concurrency:
+  group: portfolio-analytics-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      AIRBYTE_CLIENT_ID: ${{ secrets.AIRBYTE_CLIENT_ID }}
+      AIRBYTE_CLIENT_SECRET: ${{ secrets.AIRBYTE_CLIENT_SECRET }}
+      AIRBYTE_WORKSPACE_ID: ${{ secrets.AIRBYTE_WORKSPACE_ID }}
+      AIRBYTE_TRADES_CONNECTION_ID: ${{ secrets.AIRBYTE_TRADES_CONNECTION_ID }}
+      AIRBYTE_FX_CONNECTION_ID: ${{ secrets.AIRBYTE_FX_CONNECTION_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas sqlalchemy psycopg2-binary python-dotenv requests
+          pip install dbt-core==1.11.16 dbt-postgres==1.11.0
+
+      - name: Run stock price ingestion
+        run: python INGESTION/run_stock_pipeline.py
+
+      - name: Run Airbyte syncs and update warehouse
+        run: python INGESTION/airbyte_sync.py
+
+      - name: Create dbt profile
+        run: |
+          mkdir -p .dbt
+
+          python - <<'PY'
+          import os
+          import yaml
+          from sqlalchemy.engine import make_url
+
+          # Parse the Neon connection string without printing credentials
+          url = make_url(os.environ["DATABASE_URL"])
+
+          profile = {
+              "portfolio_analytics": {
+                  "target": "dev",
+                  "outputs": {
+                      "dev": {
+                          "type": "postgres",
+                          "host": url.host,
+                          "user": url.username,
+                          "password": url.password,
+                          "port": url.port or 5432,
+                          "dbname": url.database,
+                          "schema": "analytics",
+                          "threads": 4,
+                          "sslmode": url.query.get("sslmode", "require")
+                      }
+                  }
+              }
+          }
+
+          with open(".dbt/profiles.yml", "w") as file:
+              yaml.safe_dump(profile, file, sort_keys=False)
+
+          print("dbt profile created successfully.")
+          PY
+
+      - name: Run dbt models and tests
+        run: |
+          dbt build \
+            --project-dir portfolio_analytics \
+            --profiles-dir .dbt
+
+      - name: Pipeline completed
+        if: success()
+        run: echo "All pipeline stages completed successfully."
