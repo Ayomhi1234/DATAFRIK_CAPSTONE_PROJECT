@@ -1,0 +1,9 @@
+version: 2
+
+sources:
+  - name: warehouse
+    schema: warehouse
+    tables:
+      - name: stock_prices
+      - name: trades
+      - name: exchange_rates

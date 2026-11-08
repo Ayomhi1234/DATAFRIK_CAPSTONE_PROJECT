@@ -1,0 +1,29 @@
+# Local Airbyte configuration and generated files
+config.json
+catalog.json
+capstoneprojecttradelog.json
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs
+logs/
+**/logs/
+
+# dbt generated files
+portfolio_analytics/target/
+portfolio_analytics/dbt_packages/
+portfolio_analytics/.user.yml
+
+# Local data files
+stock_prices.csv
